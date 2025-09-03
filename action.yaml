@@ -48,11 +48,16 @@ runs:
 
     - name: Set up Python
       uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
 
     - name: Install SQLite RAG
       run: |
         python -m pip install --upgrade pip
-        pip install -i https://test.pypi.org/simple/ sqlite-rag
+        pip install \
+          -i https://test.pypi.org/simple/ \
+          --extra-index-url https://pypi.org/simple \
+          sqlite-rag
       shell: bash
 
       # Cache the downloaded model between workflows
@@ -66,12 +71,17 @@ runs:
         restore-keys: |
           gguf-${{ inputs.hf_model_id }}-${{ inputs.hf_gguf_file }}-${{ inputs.hf_gguf_update_date }}-
 
-    - name: Parse documents and create the database
+    - name: Download Hugging Face model
       run: |
         sqlite-rag download-model "${{ inputs.hf_model_id }}" "${{ inputs.hf_gguf_file }}" --local-dir="${{ inputs.hf_model_local_path }}"
+      if: steps.cache-model.outputs.cache-hit != 'true'
+      shell: bash
+
+    - name: Parse documents and create the database
+      run: |
         sqlite-rag add \
-          --recursive {{ inputs.source_files }} \
-          --metadata '{"base_url": "{{ inputs.base_url }}"}'
+          --recursive "${{ inputs.source_files }}" \
+          --metadata '{"base_url": "${{ inputs.base_url }}"}'
       shell: bash
 
     - name: Upload the database to SQLite Cloud
