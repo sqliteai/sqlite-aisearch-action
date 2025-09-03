@@ -16,5 +16,5 @@ jobs:
         with:
           connection_string: ${{ secrets.CONNECTION_STRING }}
           base_url: https://docs.sqlitecloud.io/docs/
-          database: aisearch-action-test.sqlite
-          source_files: docs
+          database: sqliterag.sqlite
+          source_files: docs/sqlite-cloud/sqlite-ai
