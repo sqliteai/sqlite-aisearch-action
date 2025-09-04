@@ -9,8 +9,11 @@ inputs:
   base_url:
     description: Your website's documentation base url.
     required: true
-  database:
-    description: The name of the database to use on SQLite Cloud, just remeber to create first a database on your project!
+  database_name:
+    description: The name of the database to use on SQLite Cloud
+    required: true
+  database_path:
+    description: The local path of the database file to upload to SQLite Cloud.
     required: true
   source_files:
     description: The path of the files, by default it will parse every file recursively starting from the working directory.
@@ -90,5 +93,5 @@ runs:
         GITHUB_ACTION_PATH: ${{ github.action_path }}
         CONNECTION_STRING: ${{ inputs.connection_string }}
         DATABASE_PATH: ${{ inputs.database_path }}
-        DATABASE: ${{ inputs.database }}
+        DATABASE: ${{ inputs.database_name }}
       shell: bash
