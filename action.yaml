@@ -26,7 +26,7 @@ inputs:
   hf_gguf_file:
     description: The GGUF file name for the Hugging Face model.
     required: false
-    default: "Qwen3-Embedding-0.6B-f16.gguf"
+    default: "Qwen3-Embedding-0.6B-Q8_0.gguf"
   hf_gguf_update_date:
     description: The date to force update the GGUF model cache, format YYYYMMDD.
     required: false
