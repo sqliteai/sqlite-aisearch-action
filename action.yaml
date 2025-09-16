@@ -22,15 +22,15 @@ inputs:
   hf_model_id: 
     description: The Hugging Face model ID to use for generating embeddings.
     required: false
-    default: "Qwen/Qwen3-Embedding-0.6B-GGUF"
+    default: "unsloth/embeddinggemma-300m-GGUF"
   hf_gguf_file:
     description: The GGUF file name for the Hugging Face model.
     required: false
-    default: "Qwen3-Embedding-0.6B-Q8_0.gguf"
+    default: "embeddinggemma-300M-Q8_0.gguf"
   hf_gguf_update_date:
     description: The date to force update the GGUF model cache, format YYYYMMDD.
     required: false
-    default: "202507014"
+    default: "20250904"
   hf_model_local_path:
     description: The local path to store the downloaded Hugging Face model.
     required: false
