@@ -17,6 +17,5 @@ jobs:
           connection_string: ${{ secrets.CONNECTION_STRING }}
           base_url: https://docs.sqlitecloud.io/docs/
           database_name: aisearch-action-test.sqlite
-          database_path: sqliterag.sqlite
           # only few files for testing
           source_files: docs/sqlite-cloud/sdks/php
