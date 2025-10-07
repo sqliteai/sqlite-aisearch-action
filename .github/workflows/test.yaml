@@ -18,4 +18,5 @@ jobs:
           base_url: https://docs.sqlitecloud.io/docs/
           database_name: aisearch-action-test.sqlite
           # only few files for testing
-          source_files: docs/sqlite-cloud/sdks/php
+          source_files: docs/sqlite-cloud/sdks/js
+          only_extensions: "md"
