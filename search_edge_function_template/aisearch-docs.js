@@ -16,10 +16,10 @@ const sqliteAIBaseUrl = "https://aiserver.vital-rhino.eks.euc1.ryujaz.sqlite.clo
 const sqliteAIAPI = "/v1/ai/embeddings"
 //-----------------------
 
-const requestid = request.params.requestid;
 const query = request.params.query;
+const limit = parseInt(request.params.limit) || 10; // Number of top results to return
 
-// get embedding from sqlite-ai-server
+// Get embedding from sqlite-ai-server
 const data = {"text": query };
 const response = await fetch(sqliteAIBaseUrl + sqliteAIAPI, {
     method: "POST",
@@ -36,26 +36,21 @@ if (!response.ok) {
 const result = await response.json();
 const query_embedding = result.data.embedding;
 
-// clean query for full-text search
+// Clean query for full-text search
 const query_fts = (query.toLowerCase().match(/\b\w+\b/g) || []).join(" ") + "*";
-
-// --- TEST ---
-//const test_embedding = await connection.sql('SELECT embedding FROM chunks LIMIT 1;');
-//const query_embedding = test_embedding[0].embedding;
-// ------------
 
 // Vector configuration must match the embedding parameters used during database generation
 await connection.sql("SELECT vector_init('chunks', 'embedding', 'type=INT8,dimension=768,distance=cosine')");
 
 const res = await connection.sql(
     `
-    -- sqlite-vector KNN vector search results
+        -- sqlite-vector KNN vector search results
     WITH vec_matches AS (
         SELECT
             v.rowid AS chunk_id,
             row_number() OVER (ORDER BY v.distance) AS rank_number,
             v.distance
-        FROM vector_quantize_scan('chunks', 'embedding', ?, 10) AS v
+        FROM vector_quantize_scan('chunks', 'embedding', ?, ?) AS v
     ),
     -- Full-text search results
     fts_matches AS (
@@ -65,7 +60,7 @@ const res = await connection.sql(
             rank AS score
         FROM chunks_fts
         WHERE chunks_fts MATCH ?
-        LIMIT 10
+        LIMIT ?
     ),
     -- combine FTS5 + vector search results with RRF
     matches AS (
@@ -84,28 +79,70 @@ const res = await connection.sql(
             FULL OUTER JOIN fts_matches
                 ON vec_matches.chunk_id = fts_matches.chunk_id
     )
-    SELECT
-        documents.id,
-        documents.uri,
-        documents.content as document_content,
-        documents.metadata,
-        chunks.content AS snippet,
-        vec_rank,
-        fts_rank,
-        combined_rank,
-        vec_distance,
-        fts_score
-    FROM matches
-        JOIN chunks ON chunks.id = matches.chunk_id
-        JOIN documents ON documents.id = chunks.document_id
+        SELECT
+            documents.id,
+            documents.uri,
+            documents.content as document_content,
+            documents.metadata,
+            chunks.content AS snippet,
+            vec_rank,
+            fts_rank,
+            combined_rank,
+            vec_distance,
+            fts_score
+        FROM matches
+            JOIN chunks ON chunks.id = matches.chunk_id
+            JOIN documents ON documents.id = chunks.document_id
     ORDER BY combined_rank DESC
     ;
-    `, query_embedding, query_fts)
+    `, query_embedding, limit, query_fts, limit)
 
+// The results from the query may contain multiple resulting chunks per document.
+// We want to return one result per document, so we will group by document id and take
+// the top-ranked chunk as a snippet.
+const documentsChunk = new Map();
+res.forEach(item => {
+    if (!documentsChunk.has(item.id) || item.combined_rank > documentsChunk.get(item.id).combined_rank) {
+        documentsChunk.set(item.id, item);
+    }
+});
+const topResults = Array.from(documentsChunk.values()).slice(0, limit);
+
+// ----- URLs for results -----
+// Customize this section based on how URLs should be constructed for your documents.
+// This example uses 'base_url' from metadata and 'slug' if available, otherwise derives from URI.
+// ----------------------------
+const resultsWithUrls = topResults
+    .map(item => {
+        const metadata = JSON.parse(item.metadata);
+        const baseUrl = metadata.base_url;
+        const slug = metadata.extracted?.slug;
+        const uri = item.uri;
+        
+        let fullUrl;
+        if (slug) {
+            fullUrl = `${baseUrl}${slug}`;
+        } else {
+            const uriWithoutExtension = uri
+                .toLowerCase()
+                .replace(/\.(mdx?|md)$/i, '');
+            fullUrl = `${baseUrl}${uriWithoutExtension}`;
+        }
+        
+        return {
+            id: item.id,
+            url: fullUrl,
+            title: metadata.extracted?.title || metadata.generated?.title,
+            snippet: item.snippet,
+        };
+    });
 
 return {
     data: {
-        search: res,
-        requestid: requestid
+        /**
+         * @type {Array<{id: number, url: string, title: string, snippet: string}>}
+         * The search results with constructed URLs, titles, and snippets.
+         */
+        search: resultsWithUrls
     }
 }
