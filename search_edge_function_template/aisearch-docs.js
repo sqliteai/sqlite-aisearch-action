@@ -13,11 +13,14 @@
 
 //---- CONFIGURATION ----
 const sqliteAIBaseUrl = "https://aiserver.vital-rhino.eks.euc1.ryujaz.sqlite.cloud";
-const sqliteAIAPI = "/v1/ai/embeddings"
+const sqliteAIAPI = "/v1/ai/embeddings";
+const topKSentences = 3;  // Number of top sentences to include in preview
+const maxChars = 400;     // Maximum total characters for preview
+const gap = "[...]";      // Gap indicator string
 //-----------------------
 
 const query = request.params.query;
-const limit = parseInt(request.params.limit) || 10; // Number of top results to return
+const limit = parseInt(request.params.limit) || 5; // Number of top results to return
 
 // Get embedding from sqlite-ai-server
 const data = {"text": query };
@@ -41,6 +44,7 @@ const query_fts = (query.toLowerCase().match(/\b\w+\b/g) || []).join(" ") + "*";
 
 // Vector configuration must match the embedding parameters used during database generation
 await connection.sql("SELECT vector_init('chunks', 'embedding', 'type=INT8,dimension=768,distance=cosine')");
+await connection.sql("SELECT vector_init('sentences', 'embedding', 'type=INT8,dimension=768,distance=cosine')");
 
 const res = await connection.sql(
     `
@@ -82,9 +86,9 @@ const res = await connection.sql(
         SELECT
             documents.id,
             documents.uri,
-            documents.content as document_content,
             documents.metadata,
-            chunks.content AS snippet,
+            chunks.id AS chunk_id,
+            chunks.content AS chunk_content,
             vec_rank,
             fts_rank,
             combined_rank,
@@ -95,24 +99,100 @@ const res = await connection.sql(
             JOIN documents ON documents.id = chunks.document_id
     ORDER BY combined_rank DESC
     ;
-    `, query_embedding, limit, query_fts, limit)
+    `, query_embedding, limit, query_fts, limit
+);
 
 // The results from the query may contain multiple resulting chunks per document.
 // We want to return one result per document, so we will group by document id and take
 // the top-ranked chunk as a snippet.
-const documentsChunk = new Map();
-res.forEach(item => {
-    if (!documentsChunk.has(item.id) || item.combined_rank > documentsChunk.get(item.id).combined_rank) {
-        documentsChunk.set(item.id, item);
+const seenDocuments = new Set();
+const topResults = res
+    .filter(item => !seenDocuments.has(item.id) && seenDocuments.add(item.id))
+    .slice(0, limit);
+
+// ----- Fetch top sentences for each top result -----
+for (const result of topResults) {
+    result.sentences = await connection.sql(
+        `WITH vec_matches AS (
+            SELECT
+                v.rowid AS sentence_id,
+                row_number() OVER (ORDER BY v.distance) AS rank_number,
+                v.distance
+            FROM vector_quantize_scan_stream('sentences', 'embedding', ?) AS v
+                JOIN sentences ON sentences.rowid = v.rowid
+            WHERE sentences.chunk_id = ?
+            LIMIT ?
+        )
+        SELECT
+            sentence_id,
+            -- Extract sentence directly from document content
+            COALESCE(
+                substr(chunks.content, sentences.start_offset + 1, sentences.end_offset - sentences.start_offset),
+                ""
+            ) AS content,
+            sentences.start_offset AS sentence_start_offset,
+            sentences.end_offset AS sentence_end_offset,
+            rank_number,
+            distance
+        FROM vec_matches
+            JOIN sentences ON sentences.rowid = vec_matches.sentence_id
+            JOIN chunks ON chunks.id = sentences.chunk_id
+        ORDER BY rank_number ASC
+        ;
+        `, query_embedding, result.chunk_id, topKSentences
+    );
+}
+
+// ----- Build snippets from sentences -----
+for (const item of topResults) {
+    const topSentences = item.sentences ? item.sentences.slice(0, topKSentences) : [];
+    let snippet = "";
+    
+    if (topSentences.length === 0) {
+        // Fallback: no sentences, return truncated chunk content
+        const chunkContent = item.chunk_content || "";
+        snippet = chunkContent.substring(0, maxChars);
+    } else {
+        // Sort by start_offset to maintain document order
+        topSentences.sort((a, b) => {
+            const offsetA = a.sentence_start_offset !== null ? a.sentence_start_offset : -1;
+            const offsetB = b.sentence_start_offset !== null ? b.sentence_start_offset : -1;
+            return offsetA - offsetB;
+        });
+        
+        const previewParts = [];
+        let totalChars = 0;
+        let prevEndOffset = null;
+        
+        for (const sentence of topSentences) {
+            const sentenceText = sentence.content;
+                        
+            // Check for gap between sentences
+            if (prevEndOffset !== null && sentence.sentence_start_offset !== null) {
+                const gapSize = sentence.sentence_start_offset - prevEndOffset;
+                if (gapSize > 10) {
+                    previewParts.push(gap);
+                    totalChars += gap.length;
+                }
+            }
+            
+            previewParts.push(sentenceText);
+            totalChars += sentenceText.length;
+            prevEndOffset = sentence.sentence_end_offset;
+        }
+        
+        const preview = previewParts.join(" ");
+        snippet = preview.length > maxChars ? preview.substring(0, maxChars - 3) + "..." : preview;
     }
-});
-const topResults = Array.from(documentsChunk.values()).slice(0, limit);
+    
+    item.snippet = snippet;
+}
 
 // ----- URLs for results -----
 // Customize this section based on how URLs should be constructed for your documents.
 // This example uses 'base_url' from metadata and 'slug' if available, otherwise derives from URI.
 // ----------------------------
-const resultsWithUrls = topResults
+const finalResults = topResults
     .map(item => {
         const metadata = JSON.parse(item.metadata);
         const baseUrl = metadata.base_url;
@@ -133,7 +213,7 @@ const resultsWithUrls = topResults
             id: item.id,
             url: fullUrl,
             title: metadata.extracted?.title || metadata.generated?.title,
-            snippet: item.snippet,
+            snippet: item.snippet
         };
     });
 
@@ -143,6 +223,6 @@ return {
          * @type {Array<{id: number, url: string, title: string, snippet: string}>}
          * The search results with constructed URLs, titles, and snippets.
          */
-        search: resultsWithUrls
+        search: finalResults
     }
 }
